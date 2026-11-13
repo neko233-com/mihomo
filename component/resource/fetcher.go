@@ -37,6 +37,15 @@ type Fetcher[V any] struct {
 	backoff      slowdown.Backoff
 }
 
+// ValidateBytes parses provider contents without updating the provider,
+// starting a watcher or polling loop, writing files, or making a request.
+// Callers that create proxies should release them by ending the isolated
+// validation process after use.
+func (f *Fetcher[V]) ValidateBytes(buf []byte) error {
+	_, err := f.parser(buf)
+	return err
+}
+
 func (f *Fetcher[V]) Name() string {
 	return f.name
 }

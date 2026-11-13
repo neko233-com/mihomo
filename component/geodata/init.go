@@ -26,15 +26,20 @@ var (
 	initGeoIPMutex   sync.Mutex
 	initASNMutex     sync.Mutex
 
-	geoIpEnable   atomic.Bool
-	geoSiteEnable atomic.Bool
-	asnEnable     atomic.Bool
+	geoIpEnable       atomic.Bool
+	geoSiteEnable     atomic.Bool
+	asnEnable         atomic.Bool
+	offlineValidation atomic.Bool
 
 	geoIpUrl   string
 	mmdbUrl    string
 	geoSiteUrl string
 	asnUrl     string
 )
+
+// SetOfflineValidation disables geodata downloads and repairs during an
+// isolated read-only configuration validation process.
+func SetOfflineValidation(enabled bool) { offlineValidation.Store(enabled) }
 
 func GeoIpUrl() string {
 	return geoIpUrl
@@ -91,6 +96,12 @@ func InitGeoSite() error {
 	geoSiteEnable.Store(true)
 	initGeoSiteMutex.Lock()
 	defer initGeoSiteMutex.Unlock()
+	if offlineValidation.Load() {
+		if err := Verify(C.GeositeName); err != nil {
+			return fmt.Errorf("GeoSite.dat unavailable or invalid during offline validation: %w", err)
+		}
+		return nil
+	}
 	if _, err := os.Stat(C.Path.GeoSite()); os.IsNotExist(err) {
 		log.Infoln("Can't find GeoSite.dat, start download")
 		if err := downloadToPath(GeoSiteUrl(), C.Path.GeoSite()); err != nil {
@@ -118,6 +129,16 @@ func InitGeoIP() error {
 	geoIpEnable.Store(true)
 	initGeoIPMutex.Lock()
 	defer initGeoIPMutex.Unlock()
+	if offlineValidation.Load() {
+		if GeodataMode() {
+			if err := Verify(C.GeoipName); err != nil {
+				return fmt.Errorf("GeoIP.dat unavailable or invalid during offline validation: %w", err)
+			}
+		} else if !mmdb.Verify(C.Path.MMDB()) {
+			return fmt.Errorf("MMDB unavailable or invalid during offline validation")
+		}
+		return nil
+	}
 	if GeodataMode() {
 		if _, err := os.Stat(C.Path.GeoIP()); os.IsNotExist(err) {
 			log.Infoln("Can't find GeoIP.dat, start download")
@@ -169,6 +190,12 @@ func InitASN() error {
 	asnEnable.Store(true)
 	initASNMutex.Lock()
 	defer initASNMutex.Unlock()
+	if offlineValidation.Load() {
+		if !mmdb.Verify(C.Path.ASN()) {
+			return fmt.Errorf("ASN database unavailable or invalid during offline validation")
+		}
+		return nil
+	}
 	if _, err := os.Stat(C.Path.ASN()); os.IsNotExist(err) {
 		log.Infoln("Can't find ASN.mmdb, start download")
 		if err := downloadToPath(ASNUrl(), C.Path.ASN()); err != nil {

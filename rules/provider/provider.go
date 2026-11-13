@@ -94,6 +94,24 @@ type RuleSetProvider struct {
 	*ruleSetProvider
 }
 
+// ValidateBytes verifies the YAML envelope in addition to the runtime parser,
+// which otherwise accepts some malformed files as empty rule sets.
+func (rp *RuleSetProvider) ValidateBytes(data []byte) error {
+	if rp.format == P.YamlRule {
+		var content struct {
+			Payload *[]string `yaml:"payload"`
+			Rules   *[]string `yaml:"rules"`
+		}
+		if err := yaml.Unmarshal(data, &content); err != nil {
+			return err
+		}
+		if content.Payload == nil && content.Rules == nil {
+			return ErrNoPayload
+		}
+	}
+	return rp.Fetcher.ValidateBytes(data)
+}
+
 func (rp *ruleSetProvider) Initial() error {
 	_, err := rp.Fetcher.Initial()
 	return err
