@@ -57,6 +57,13 @@ func ApplyConfig(cfg *config.Config) {
 	executor.ApplyConfig(cfg, true)
 }
 
+// ApplyConfigWithRestoredFakeIP applies a configuration whose fake-IP pools
+// have already been restored by the embedding process.
+func ApplyConfigWithRestoredFakeIP(cfg *config.Config) {
+	applyRoute(cfg)
+	executor.ApplyConfigWithRestoredFakeIP(cfg, true)
+}
+
 func applyRoute(cfg *config.Config) {
 	if cfg.Controller.ExternalUI != "" {
 		route.SetUIPath(cfg.Controller.ExternalUI)

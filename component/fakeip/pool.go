@@ -25,6 +25,8 @@ type store interface {
 	Exist(ip netip.Addr) bool
 	CloneTo(store)
 	FlushFakeIP() error
+	SnapshotEntries() ([]Entry, error)
+	ReplaceEntries([]Entry, netip.Addr, bool) error
 }
 
 // Pool is an implementation about fake ip generator without storage

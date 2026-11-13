@@ -82,6 +82,16 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 
 // ApplyConfig dispatch configure to all parts without ExternalController
 func ApplyConfig(cfg *config.Config, force bool) {
+	applyConfig(cfg, force, false)
+}
+
+// ApplyConfigWithRestoredFakeIP preserves pools already restored by an
+// embedding application while still applying all other normal settings.
+func ApplyConfigWithRestoredFakeIP(cfg *config.Config, force bool) {
+	applyConfig(cfg, force, true)
+}
+
+func applyConfig(cfg *config.Config, force, restoredFakeIP bool) {
 	mux.Lock()
 	defer mux.Unlock()
 	log.SetLevel(cfg.General.LogLevel)
@@ -102,7 +112,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
-	updateDNS(cfg.DNS, cfg.General.IPv6)
+	updateDNS(cfg.DNS, cfg.General.IPv6, restoredFakeIP)
 	updateNTP(cfg.NTP) // initialize NTP after DNS because an NTP server may be a hostname.
 	updateListeners(cfg.General, cfg.Listeners, force)
 	updateTun(cfg.General) // tun should not care "force"
@@ -235,7 +245,7 @@ func updateNTP(c *config.NTP) {
 	}
 }
 
-func updateDNS(c *config.DNS, generalIPv6 bool) {
+func updateDNS(c *config.DNS, generalIPv6, restoredFakeIP bool) {
 	if !c.Enable {
 		resolver.DefaultResolver = nil
 		resolver.DefaultHostMapper = nil
@@ -276,7 +286,11 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 
 	// reuse cache of old host mapper
 	if old := resolver.DefaultHostMapper; old != nil {
-		m.PatchFrom(old.(*dns.ResolverEnhancer))
+		if restoredFakeIP {
+			m.PatchMappingFrom(old.(*dns.ResolverEnhancer))
+		} else {
+			m.PatchFrom(old.(*dns.ResolverEnhancer))
+		}
 	}
 
 	s := dns.NewService(r, m)

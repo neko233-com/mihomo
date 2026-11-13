@@ -20,6 +20,35 @@ type ResolverEnhancer struct {
 	useHosts      bool
 }
 
+// FakeIPState carries the current v4 and v6 fake-IP allocations between
+// kernel processes without changing the configured address ranges.
+type FakeIPState struct {
+	IPv4 *fakeip.Snapshot
+	IPv6 *fakeip.Snapshot
+}
+
+func (h *ResolverEnhancer) ExportFakeIPState() (FakeIPState, error) {
+	var state FakeIPState
+	if h == nil || !h.FakeIPEnabled() {
+		return state, nil
+	}
+	if h.fakeIPPool != nil {
+		snapshot, err := h.fakeIPPool.ExportSnapshot()
+		if err != nil {
+			return state, err
+		}
+		state.IPv4 = &snapshot
+	}
+	if h.fakeIPPool6 != nil {
+		snapshot, err := h.fakeIPPool6.ExportSnapshot()
+		if err != nil {
+			return state, err
+		}
+		state.IPv6 = &snapshot
+	}
+	return state, nil
+}
+
 func (h *ResolverEnhancer) FakeIPEnabled() bool {
 	return h.mode == C.DNSFakeIP
 }
@@ -135,9 +164,7 @@ func (h *ResolverEnhancer) FlushFakeIP() error {
 }
 
 func (h *ResolverEnhancer) PatchFrom(o *ResolverEnhancer) {
-	if h.mapping != nil && o.mapping != nil {
-		o.mapping.CloneTo(h.mapping)
-	}
+	h.PatchMappingFrom(o)
 
 	if h.fakeIPPool != nil && o.fakeIPPool != nil {
 		h.fakeIPPool.CloneFrom(o.fakeIPPool)
@@ -145,6 +172,14 @@ func (h *ResolverEnhancer) PatchFrom(o *ResolverEnhancer) {
 
 	if h.fakeIPPool6 != nil && o.fakeIPPool6 != nil {
 		h.fakeIPPool6.CloneFrom(o.fakeIPPool6)
+	}
+}
+
+// PatchMappingFrom preserves non-fake DNS mappings without overwriting an
+// explicitly restored fake-IP pool.
+func (h *ResolverEnhancer) PatchMappingFrom(o *ResolverEnhancer) {
+	if h.mapping != nil && o.mapping != nil {
+		o.mapping.CloneTo(h.mapping)
 	}
 }
 

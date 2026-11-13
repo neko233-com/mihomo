@@ -1,6 +1,7 @@
 package fakeip
 
 import (
+	"errors"
 	"net/netip"
 
 	"github.com/metacubex/mihomo/common/lru"
@@ -9,6 +10,7 @@ import (
 type memoryStore struct {
 	cacheIP   *lru.LruCache[string, netip.Addr]
 	cacheHost *lru.LruCache[netip.Addr, string]
+	capacity  int
 }
 
 // GetByHost implements store.GetByHost
@@ -72,9 +74,33 @@ func (m *memoryStore) FlushFakeIP() error {
 	return nil
 }
 
+func (m *memoryStore) SnapshotEntries() ([]Entry, error) {
+	items := m.cacheIP.Entries()
+	entries := make([]Entry, 0, len(items))
+	for _, item := range items {
+		entries = append(entries, Entry{Host: item.Key, IP: item.Value.String()})
+	}
+	return entries, nil
+}
+
+func (m *memoryStore) ReplaceEntries(entries []Entry, _ netip.Addr, _ bool) error {
+	if m.capacity > 0 && len(entries) > m.capacity {
+		return errors.New("fake-ip snapshot exceeds destination cache capacity")
+	}
+	m.cacheIP.Clear()
+	m.cacheHost.Clear()
+	for _, entry := range entries {
+		ip := netip.MustParseAddr(entry.IP) // validated by Pool.ImportSnapshot
+		m.cacheIP.Set(entry.Host, ip)
+		m.cacheHost.Set(ip, entry.Host)
+	}
+	return nil
+}
+
 func newMemoryStore(size int) *memoryStore {
 	return &memoryStore{
 		cacheIP:   lru.New[string, netip.Addr](lru.WithSize[string, netip.Addr](size)),
 		cacheHost: lru.New[netip.Addr, string](lru.WithSize[netip.Addr, string](size)),
+		capacity:  size,
 	}
 }

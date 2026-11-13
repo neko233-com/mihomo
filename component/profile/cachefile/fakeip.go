@@ -1,12 +1,76 @@
 package cachefile
 
 import (
+	"bytes"
+	"errors"
 	"net/netip"
 
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/bbolt"
 )
+
+type FakeIPEntry struct {
+	Host    string
+	Address netip.Addr
+}
+
+func (c *FakeIpStore) SnapshotEntries(prefix netip.Prefix) ([]FakeIPEntry, error) {
+	if c.DB == nil {
+		return nil, errors.New("fake-ip cache is unavailable")
+	}
+	var entries []FakeIPEntry
+	err := c.DB.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(c.bucketName)
+		if bucket == nil {
+			return nil
+		}
+		return bucket.ForEach(func(key, value []byte) error {
+			ip, ok := netip.AddrFromSlice(value)
+			if !ok || !prefix.Contains(ip) || !bytes.Equal(bucket.Get(ip.AsSlice()), key) {
+				return nil
+			}
+			entries = append(entries, FakeIPEntry{Host: string(key), Address: ip})
+			if len(entries) > 100000 {
+				return errors.New("fake-ip cache has too many entries")
+			}
+			return nil
+		})
+	})
+	return entries, err
+}
+
+func (c *FakeIpStore) ReplaceEntries(entries []FakeIPEntry, offset netip.Addr, cycle bool, offsetKey, cycleKey string) error {
+	if c.DB == nil {
+		return errors.New("fake-ip cache is unavailable")
+	}
+	return c.DB.Update(func(tx *bbolt.Tx) error {
+		if tx.Bucket(c.bucketName) != nil {
+			if err := tx.DeleteBucket(c.bucketName); err != nil {
+				return err
+			}
+		}
+		bucket, err := tx.CreateBucketIfNotExists(c.bucketName)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := bucket.Put([]byte(entry.Host), entry.Address.AsSlice()); err != nil {
+				return err
+			}
+			if err := bucket.Put(entry.Address.AsSlice(), []byte(entry.Host)); err != nil {
+				return err
+			}
+		}
+		if err := bucket.Put([]byte(offsetKey), offset.AsSlice()); err != nil {
+			return err
+		}
+		if cycle {
+			return bucket.Put([]byte(cycleKey), offset.AsSlice())
+		}
+		return nil
+	})
+}
 
 type FakeIpStore struct {
 	*CacheFile

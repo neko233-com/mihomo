@@ -203,6 +203,27 @@ func (c *LruCache[K, V]) CloneTo(n *LruCache[K, V]) {
 	}
 }
 
+// Entry is a point-in-time copy of one cache entry.
+type Entry[K comparable, V any] struct {
+	Key   K
+	Value V
+}
+
+// Entries returns entries from least to most recently used.
+func (c *LruCache[K, V]) Entries() []Entry[K, V] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Entry[K, V], 0, len(c.cache))
+	for e := c.lru.Front(); e != nil; e = e.Next() {
+		v := e.Value
+		if !c.staleReturn && c.maxAge > 0 && v.expires <= time.Now().Unix() {
+			continue
+		}
+		out = append(out, Entry[K, V]{Key: v.key, Value: v.value})
+	}
+	return out
+}
+
 func (c *LruCache[K, V]) get(key K) *entry[K, V] {
 	le, ok := c.cache[key]
 	if !ok {
