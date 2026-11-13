@@ -481,16 +481,18 @@ func ReCreateMixed(port int, tunnel C.Tunnel) {
 		return
 	}
 
-	mixedListener, err = mixed.New(addr, tunnel)
+	tcpListener, err := mixed.New(addr, tunnel)
 	if err != nil {
 		return
 	}
 
-	mixedUDPLister, err = socks.NewUDP(addr, tunnel)
+	udpListener, err := socks.NewUDP(addr, tunnel)
 	if err != nil {
-		mixedListener.Close()
+		tcpListener.Close()
 		return
 	}
+	mixedListener = tcpListener
+	mixedUDPLister = udpListener
 
 	log.Infoln("Mixed(http+socks) proxy listening at: %s", mixedListener.Address())
 }
