@@ -54,6 +54,7 @@ var Path = func() *path {
 type path struct {
 	homeDir         string
 	configFile      string
+	cacheFile       string
 	allowUnsafePath bool
 	safePaths       []string
 }
@@ -67,6 +68,10 @@ func SetHomeDir(root string) {
 func SetConfig(file string) {
 	Path.configFile = file
 }
+
+// SetCacheFile selects a process-specific cache before the cache is opened.
+// An empty value restores the default cache under the configuration home.
+func SetCacheFile(file string) { Path.cacheFile = file }
 
 func (p *path) HomeDir() string {
 	return p.homeDir
@@ -187,6 +192,9 @@ func (p *path) OldCache() string {
 }
 
 func (p *path) Cache() string {
+	if p.cacheFile != "" {
+		return p.cacheFile
+	}
 	return P.Join(p.homeDir, "cache.db")
 }
 
