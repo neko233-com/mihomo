@@ -73,6 +73,13 @@ func SetConfig(file string) {
 // An empty value restores the default cache under the configuration home.
 func SetCacheFile(file string) { Path.cacheFile = file }
 
+// ConstrainPaths discards environment-provided path exceptions. Elevated
+// embedding applications should call it before processing untrusted config.
+func ConstrainPaths() {
+	Path.allowUnsafePath = false
+	Path.safePaths = nil
+}
+
 func (p *path) HomeDir() string {
 	return p.homeDir
 }

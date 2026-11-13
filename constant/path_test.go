@@ -1,8 +1,10 @@
 package constant
 
 import (
-	"github.com/stretchr/testify/assert"
+	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPath(t *testing.T) {
@@ -38,4 +40,14 @@ func TestPath(t *testing.T) {
 	assert.True(t, (&path{}).IsSafePath("./mykey/../key1.key"))
 	assert.False(t, (&path{}).IsSafePath("./mykey/../../key1.key"))
 
+}
+
+func TestConstrainPathsDiscardsEnvironmentExceptions(t *testing.T) {
+	old := Path
+	defer func() { Path = old }()
+	Path = &path{homeDir: t.TempDir(), allowUnsafePath: true, safePaths: []string{t.TempDir()}}
+	ConstrainPaths()
+	assert.False(t, Path.allowUnsafePath)
+	assert.Empty(t, Path.safePaths)
+	assert.False(t, Path.IsSafePath(filepath.Join(t.TempDir(), "outside")))
 }
