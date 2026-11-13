@@ -10,7 +10,7 @@ func TestCacheFileOverride(t *testing.T) {
 	defer func() { Path.homeDir, Path.cacheFile = oldHome, oldCache }()
 	SetHomeDir(t.TempDir())
 	SetCacheFile("")
-	if got, want := Path.Cache(), filepath.ToSlash(filepath.Join(Path.homeDir, "cache.db")); got != want {
+	if got, want := Path.Cache(), filepath.ToSlash(filepath.Join(Path.homeDir, "cache.db")); filepath.ToSlash(got) != want {
 		t.Fatalf("default %q want %q", got, want)
 	}
 	alternative := filepath.Join(Path.homeDir, "worker-cache.db")
