@@ -183,8 +183,8 @@ func (f *Fetcher[V]) Update() (V, bool, error) {
 }
 
 // PauseUpdates cancels pending reads and prevents new reads until resumed.
-// It also waits for any already-committing update to finish, so a canceled
-// read cannot publish stale contents after this method returns.
+// It does not wait for an already-committing update: callers requiring a
+// commit barrier must use WithSnapshot before acting on the cached file.
 func (f *Fetcher[V]) PauseUpdates() {
 	f.updateMu.Lock()
 	f.updatePaused = true
@@ -192,8 +192,6 @@ func (f *Fetcher[V]) PauseUpdates() {
 		cancel()
 	}
 	f.updateMu.Unlock()
-	f.loadBufMutex.Lock()
-	f.loadBufMutex.Unlock()
 }
 
 // ResumeUpdates permits new updates; it never reopens a closed fetcher.

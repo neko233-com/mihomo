@@ -94,3 +94,30 @@ func TestCanceledUpdateCannotCommitAfterPause(t *testing.T) {
 		t.Fatalf("closed update: %v", err)
 	}
 }
+
+func TestPauseDoesNotWaitForBlockedCommit(t *testing.T) {
+	v := &pausableTestVehicle{started: make(chan struct{}, 1)}
+	entered, release := make(chan struct{}), make(chan struct{})
+	f := NewFetcher("test", time.Hour, v, nil, func(b []byte) (string, error) { return string(b), nil }, func(string) { close(entered); <-release })
+	defer f.Close()
+	updated := make(chan error, 1)
+	go func() { _, _, err := f.Update(); updated <- err }()
+	<-entered
+	paused := make(chan struct{})
+	go func() { f.PauseUpdates(); close(paused) }()
+	select {
+	case <-paused:
+	case <-time.After(time.Second):
+		close(release)
+		<-updated
+		t.Fatal("pause waited for an unrelated blocked commit")
+	}
+	if _, _, err := f.Update(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("paused update: %v", err)
+	}
+	close(release)
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	f.ResumeUpdates()
+}
