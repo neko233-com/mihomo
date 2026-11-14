@@ -34,6 +34,7 @@ type Fetcher[V any] struct {
 	onUpdate     func(V)
 	watcher      *fswatch.Watcher
 	loadBufMutex sync.Mutex
+	closed       bool
 	backoff      slowdown.Backoff
 }
 
@@ -44,6 +45,15 @@ type Fetcher[V any] struct {
 func (f *Fetcher[V]) ValidateBytes(buf []byte) error {
 	_, err := f.parser(buf)
 	return err
+}
+
+// WithSnapshot serializes a provider-cache read with completed writes. The
+// caller must confine vehicle.Path() to an authorized directory before opening
+// it. It is also safe after Close, when the final cache may be handed off.
+func (f *Fetcher[V]) WithSnapshot(fn func(P.Vehicle, utils.HashType) error) error {
+	f.loadBufMutex.Lock()
+	defer f.loadBufMutex.Unlock()
+	return fn(f.vehicle, f.hash)
 }
 
 func (f *Fetcher[V]) Name() string {
@@ -123,7 +133,13 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
-	buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
+	f.loadBufMutex.Lock()
+	closed, oldHash := f.closed, f.hash
+	f.loadBufMutex.Unlock()
+	if closed {
+		return lo.Empty[V](), false, context.Canceled
+	}
+	buf, hash, err := f.vehicle.Read(f.ctx, oldHash)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
@@ -138,6 +154,9 @@ func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
+	if f.closed {
+		return lo.Empty[V](), false, context.Canceled
+	}
 
 	now := time.Now()
 	if f.hash.Equal(hash) {
@@ -177,6 +196,9 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 
 func (f *Fetcher[V]) Close() error {
 	f.ctxCancel()
+	f.loadBufMutex.Lock()
+	f.closed = true
+	f.loadBufMutex.Unlock()
 	if f.watcher != nil {
 		_ = f.watcher.Close()
 	}
