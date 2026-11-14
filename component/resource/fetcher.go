@@ -36,6 +36,10 @@ type Fetcher[V any] struct {
 	onUpdate     func(V)
 	watcher      *fswatch.Watcher
 	loadBufMutex sync.Mutex
+	updateMu     sync.Mutex
+	updatePaused bool
+	updates      map[uint64]context.CancelFunc
+	updateID     uint64
 	closed       atomic.Bool
 	backoff      slowdown.Backoff
 }
@@ -143,18 +147,60 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
+	f.updateMu.Lock()
+	if f.updatePaused || f.closed.Load() {
+		f.updateMu.Unlock()
+		return lo.Empty[V](), false, context.Canceled
+	}
+	ctx, cancel := context.WithCancel(f.ctx)
+	if f.updates == nil {
+		f.updates = make(map[uint64]context.CancelFunc)
+	}
+	f.updateID++
+	id := f.updateID
+	f.updates[id] = cancel
+	f.updateMu.Unlock()
+	defer func() {
+		cancel()
+		f.updateMu.Lock()
+		delete(f.updates, id)
+		f.updateMu.Unlock()
+	}()
 	f.loadBufMutex.Lock()
 	closed, oldHash := f.closed.Load(), f.hash
 	f.loadBufMutex.Unlock()
 	if closed {
 		return lo.Empty[V](), false, context.Canceled
 	}
-	buf, hash, err := f.vehicle.Read(f.ctx, oldHash)
+	buf, hash, err := f.vehicle.Read(ctx, oldHash)
 	if err != nil {
-		f.backoff.AddAttempt() // add a failed attempt to backoff
+		if ctx.Err() == nil {
+			f.backoff.AddAttempt() // add a failed attempt to backoff
+		}
 		return lo.Empty[V](), false, err
 	}
-	return f.loadBuf(buf, hash, f.vehicle.Type() != P.File)
+	return f.loadBufContext(ctx, buf, hash, f.vehicle.Type() != P.File)
+}
+
+// PauseUpdates cancels pending reads and prevents new reads until resumed.
+// It also waits for any already-committing update to finish, so a canceled
+// read cannot publish stale contents after this method returns.
+func (f *Fetcher[V]) PauseUpdates() {
+	f.updateMu.Lock()
+	f.updatePaused = true
+	for _, cancel := range f.updates {
+		cancel()
+	}
+	f.updateMu.Unlock()
+	f.loadBufMutex.Lock()
+	f.loadBufMutex.Unlock()
+}
+
+// ResumeUpdates permits new updates; it never reopens a closed fetcher.
+func (f *Fetcher[V]) ResumeUpdates() {
+	f.updateMu.Lock()
+	f.updatePaused = false
+	f.updateMu.Unlock()
 }
 
 func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
@@ -162,9 +208,13 @@ func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
 }
 
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
+	return f.loadBufContext(context.Background(), buf, hash, updateFile)
+}
+
+func (f *Fetcher[V]) loadBufContext(ctx context.Context, buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
-	if f.closed.Load() {
+	if f.closed.Load() || ctx.Err() != nil {
 		return lo.Empty[V](), false, context.Canceled
 	}
 
