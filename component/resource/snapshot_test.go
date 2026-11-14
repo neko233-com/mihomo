@@ -30,7 +30,7 @@ func (v *blockedVehicle) Write(b []byte) error {
 	return nil
 }
 
-func TestSnapshotAndCloseWaitForCommittedWrite(t *testing.T) {
+func TestSnapshotWaitsForWriteWithoutBlockingClose(t *testing.T) {
 	v := &blockedVehicle{started: make(chan struct{}), allow: make(chan struct{})}
 	f := NewFetcher("test", 0, v, nil, func(b []byte) (string, error) { return string(b), nil }, nil)
 	updated := make(chan error, 1)
@@ -43,17 +43,20 @@ func TestSnapshotAndCloseWaitForCommittedWrite(t *testing.T) {
 	closed := make(chan error, 1)
 	go func() { closed <- f.Close() }()
 	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close blocked behind a provider write")
+	}
+	select {
 	case <-snapshot:
 		t.Fatal("snapshot observed an incomplete write")
-	case <-closed:
-		t.Fatal("close returned during write")
 	case <-time.After(30 * time.Millisecond):
 	}
 	close(v.allow)
 	if err := <-updated; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-closed; err != nil {
 		t.Fatal(err)
 	}
 	if got := <-snapshot; got != "new" {

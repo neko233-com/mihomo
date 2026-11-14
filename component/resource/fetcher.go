@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
@@ -34,7 +35,7 @@ type Fetcher[V any] struct {
 	onUpdate     func(V)
 	watcher      *fswatch.Watcher
 	loadBufMutex sync.Mutex
-	closed       bool
+	closed       atomic.Bool
 	backoff      slowdown.Backoff
 }
 
@@ -134,7 +135,7 @@ func (f *Fetcher[V]) Initial() (V, error) {
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
 	f.loadBufMutex.Lock()
-	closed, oldHash := f.closed, f.hash
+	closed, oldHash := f.closed.Load(), f.hash
 	f.loadBufMutex.Unlock()
 	if closed {
 		return lo.Empty[V](), false, context.Canceled
@@ -154,7 +155,7 @@ func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
-	if f.closed {
+	if f.closed.Load() {
 		return lo.Empty[V](), false, context.Canceled
 	}
 
@@ -195,10 +196,8 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 }
 
 func (f *Fetcher[V]) Close() error {
+	f.closed.Store(true)
 	f.ctxCancel()
-	f.loadBufMutex.Lock()
-	f.closed = true
-	f.loadBufMutex.Unlock()
 	if f.watcher != nil {
 		_ = f.watcher.Close()
 	}
