@@ -29,6 +29,7 @@ type Fetcher[V any] struct {
 	vehicle      P.Vehicle
 	bundleFile   BundleFile
 	updatedAt    time.Time
+	timeMu       sync.RWMutex
 	hash         utils.HashType
 	parser       Parser[V]
 	interval     time.Duration
@@ -70,7 +71,15 @@ func (f *Fetcher[V]) VehicleType() P.VehicleType {
 }
 
 func (f *Fetcher[V]) UpdatedAt() time.Time {
+	f.timeMu.RLock()
+	defer f.timeMu.RUnlock()
 	return f.updatedAt
+}
+
+func (f *Fetcher[V]) setUpdatedAt(value time.Time) {
+	f.timeMu.Lock()
+	f.updatedAt = value
+	f.timeMu.Unlock()
 }
 
 func (f *Fetcher[V]) Initial() (V, error) {
@@ -79,7 +88,7 @@ func (f *Fetcher[V]) Initial() (V, error) {
 		buf, err := os.ReadFile(f.vehicle.Path())
 		modTime := stat.ModTime()
 		contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), false)
-		f.updatedAt = modTime // reset updatedAt to file's modTime
+		f.setUpdatedAt(modTime) // reset updatedAt to file's modTime
 
 		if err == nil {
 			err = f.startPullLoop(time.Since(modTime) > f.interval)
@@ -101,7 +110,7 @@ func (f *Fetcher[V]) Initial() (V, error) {
 				modTime = stat.ModTime()
 			}
 			contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), true)
-			f.updatedAt = modTime // reset updatedAt to file's modTime
+			f.setUpdatedAt(modTime) // reset updatedAt to file's modTime
 
 			if err == nil {
 				log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
@@ -164,7 +173,7 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 		if updateFile {
 			_ = os.Chtimes(f.vehicle.Path(), now, now)
 		}
-		f.updatedAt = now
+		f.setUpdatedAt(now)
 		f.backoff.Reset() // no error, reset backoff
 		return lo.Empty[V](), true, nil
 	}
@@ -185,7 +194,7 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 			return lo.Empty[V](), false, err
 		}
 	}
-	f.updatedAt = now
+	f.setUpdatedAt(now)
 	f.hash = hash
 
 	if f.onUpdate != nil {
@@ -205,7 +214,7 @@ func (f *Fetcher[V]) Close() error {
 }
 
 func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
-	initialInterval := f.interval - time.Since(f.updatedAt)
+	initialInterval := f.interval - time.Since(f.UpdatedAt())
 	if initialInterval > f.interval {
 		initialInterval = f.interval
 	}

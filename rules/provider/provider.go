@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/pool"
@@ -60,8 +61,15 @@ type mrsRuleStrategy interface {
 }
 
 type baseProvider struct {
-	behavior P.RuleBehavior
-	strategy ruleStrategy
+	behavior   P.RuleBehavior
+	strategy   ruleStrategy
+	strategyMu sync.RWMutex
+}
+
+func (bp *baseProvider) currentStrategy() ruleStrategy {
+	bp.strategyMu.RLock()
+	defer bp.strategyMu.RUnlock()
+	return bp.strategy
 }
 
 func (bp *baseProvider) Type() P.ProviderType {
@@ -73,15 +81,20 @@ func (bp *baseProvider) Behavior() P.RuleBehavior {
 }
 
 func (bp *baseProvider) Count() int {
-	return bp.strategy.Count()
+	strategy := bp.currentStrategy()
+	if strategy == nil {
+		return 0
+	}
+	return strategy.Count()
 }
 
 func (bp *baseProvider) Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool {
-	return bp.strategy != nil && bp.strategy.Match(metadata, helper)
+	strategy := bp.currentStrategy()
+	return strategy != nil && strategy.Match(metadata, helper)
 }
 
 func (bp *baseProvider) Strategy() any {
-	return bp.strategy
+	return bp.currentStrategy()
 }
 
 type ruleSetProvider struct {
@@ -128,7 +141,7 @@ func (rp *ruleSetProvider) MarshalJSON() ([]byte, error) {
 			Behavior:    rp.behavior.String(),
 			Format:      rp.format.String(),
 			Name:        rp.Fetcher.Name(),
-			RuleCount:   rp.strategy.Count(),
+			RuleCount:   rp.Count(),
 			Type:        rp.Type().String(),
 			UpdatedAt:   rp.UpdatedAt(),
 			VehicleType: rp.VehicleType().String(),
@@ -149,7 +162,9 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 	}
 
 	onUpdate := func(strategy ruleStrategy) {
+		rp.strategyMu.Lock()
 		rp.strategy = strategy
+		rp.strategyMu.Unlock()
 		tunnel.RuleUpdateCallback().Emit(rp)
 	}
 
@@ -211,10 +226,7 @@ func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStr
 			line = buf[s : i+1]
 			s = i + 1
 		} else {
-			s = len(buf)                                      // stop loop in next step
-			if firstLineLength == 0 && format == P.YamlRule { // no head or only one line body
-				return nil, ErrNoPayload
-			}
+			s = len(buf) // stop loop in next step
 		}
 		var str string
 		switch format {
@@ -279,6 +291,31 @@ func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStr
 		strategy.Insert(str)
 	}
 
+	if format == P.YamlRule && firstLineLength == 0 {
+		// Flow-style YAML is valid Clash input but cannot be parsed by the
+		// streaming block-list path above. Do not silently treat it as empty.
+		var flow struct {
+			Payload *[]string `yaml:"payload"`
+			Rules   *[]string `yaml:"rules"`
+		}
+		if err := yaml.Unmarshal(buf, &flow); err != nil {
+			return nil, err
+		}
+		if flow.Payload == nil && flow.Rules == nil {
+			return nil, ErrNoPayload
+		}
+		var rules []string
+		if flow.Payload != nil {
+			rules = *flow.Payload
+		} else {
+			rules = *flow.Rules
+		}
+		for _, rule := range rules {
+			if rule != "" {
+				strategy.Insert(rule)
+			}
+		}
+	}
 	strategy.FinishInsert()
 
 	return strategy, nil
@@ -303,6 +340,7 @@ type inlineProvider struct {
 	baseProvider
 	name     string
 	updateAt time.Time
+	updateMu sync.RWMutex
 	payload  []string
 }
 
@@ -316,7 +354,9 @@ func (i *inlineProvider) Initial() error {
 
 func (i *inlineProvider) Update() error {
 	// make api update happy
+	i.updateMu.Lock()
 	i.updateAt = time.Now()
+	i.updateMu.Unlock()
 	return nil
 }
 
@@ -325,14 +365,17 @@ func (i *inlineProvider) VehicleType() P.VehicleType {
 }
 
 func (i *inlineProvider) MarshalJSON() ([]byte, error) {
+	i.updateMu.RLock()
+	updatedAt := i.updateAt
+	i.updateMu.RUnlock()
 	return json.Marshal(
 		providerForApi{
 			Behavior:    i.behavior.String(),
 			Name:        i.Name(),
-			RuleCount:   i.strategy.Count(),
+			RuleCount:   i.Count(),
 			Type:        i.Type().String(),
 			VehicleType: i.VehicleType().String(),
-			UpdatedAt:   i.updateAt,
+			UpdatedAt:   updatedAt,
 			Payload:     i.payload,
 		})
 }
